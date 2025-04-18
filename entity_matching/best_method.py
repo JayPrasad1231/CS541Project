@@ -11,7 +11,8 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 # Load models
 model_large = pipeline("text2text-generation", model="google/flan-t5-base", device=0)
 model_small = pipeline("text2text-generation", model="google/flan-t5-small", device=0)
-model_llm = genai.Client(api_key=GOOGLE_API_KEY)
+genai.configure(api_key=GOOGLE_API_KEY)
+model_llm = genai.GenerativeModel("gemini-2.0-flash-lite-001")
 
 def format_record(record):
     return ', '.join(f"{k}: {v}" for k, v in record.items())
@@ -38,15 +39,23 @@ def direct_match(anchor, candidate, model):
     return {"match": output.strip(), "time": duration, "tokens": tokens}
 
 def query_llm(anchor, candidate):
-
     prompt = create_match_prompt(anchor, candidate)
     start = time.time()
-    output = model_llm.models.generate_content(
-            model="gemini-2.0-flash", contents=prompt
-    )
+
+    # Count tokens first
+    token_info = model_llm.count_tokens(prompt)
+    num_tokens = token_info.total_tokens  # total prompt tokens
+
+    # Generate response
+    output = model_llm.generate_content(prompt)
     duration = time.time() - start
-    tokens = len(prompt.split()) + len(output.split())
-    return {"match": output.strip(), "time": duration, "tokens": tokens}
+
+    return {
+        "match": output.text.strip(),
+        "time": duration,
+        "tokens": num_tokens
+    }
+
 
 
 # Chain of Verification Questions:
