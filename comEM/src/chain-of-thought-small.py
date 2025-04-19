@@ -1,3 +1,6 @@
+# Chain-of-Thought Prompting Versions of Matching, Selecting, and Comparing
+# Assumes shared setup (model, data loading, blocking, etc.) is already handled.
+
 import pandas as pd
 import time
 from tqdm import tqdm
@@ -52,9 +55,8 @@ def query_llm(anchor, candidate):
     duration = time.time() - start
     return output.strip(), len(prompt.split()), duration
 
-
-def zero_shot_small_matching():
-
+# === Chain-of-Thought Matching ===
+def cot_matching():
     predictions = []
     for idx, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
         candidates = block_records(a_row, google)
@@ -62,21 +64,31 @@ def zero_shot_small_matching():
 
         for _, g_row in candidates.iterrows():
             candidate_text = format_record(g_row)
-            pred, num_tokens, duration = query_llm(anchor_text, candidate_text)
+            prompt = f"""
+            Determine whether the two products refer to the same entity.
+            Think through each part step-by-step: title, brand, and manufacturer.
+
+            Product A: {anchor_text}
+            Product B: {candidate_text}
+
+            Final Answer: Yes or No.
+            """
+            start = time.time()
+            output = llm(prompt, max_new_tokens=50, truncation=True)[0]['generated_text']
+            duration = time.time() - start
 
             predictions.append({
                 "idAmazon": a_row['id'],
                 "idGoogle": g_row['id'],
-                "prediction": pred,
+                "prediction": "Yes" if "yes" in output.lower() else "No",
                 "duration": duration,
-                "num_tokens": num_tokens
+                "num_tokens": len(prompt.split()) + len(output.split())
             })
 
     return predictions
 
-zero_shot_small_matching()
-
-def zero_shot_small_selecting():
+# === Chain-of-Thought Selecting ===
+def cot_selecting():
     predictions = []
 
     for idx, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
@@ -89,17 +101,16 @@ def zero_shot_small_selecting():
         candidate_ids = [g_row['id'] for _, g_row in candidates.iterrows()]
 
         prompt = f"""
-        You are given a product description and a list of candidate products.
-        Choose the number of the candidate that matches the given product best.
-        If none match, respond with '0'.
+        Analyze the following product and choose the best matching candidate.
+        Think step-by-step about the title, brand, and manufacturer. Respond with the number.
 
         Product: {anchor_text}
 
         Candidates:
-        """ + "\n".join([f"{i+1}. {text}" for i, text in enumerate(candidate_texts)]) + "\n\nAnswer:"
+        """ + "\n".join([f"{i+1}. {text}" for i, text in enumerate(candidate_texts)]) + "\n{0}. None of the above\n\nAnswer:"
 
         start = time.time()
-        response = llm(prompt, max_new_tokens=5, truncation=True)[0]['generated_text']
+        response = llm(prompt, max_new_tokens=20, truncation=True)[0]['generated_text']
         duration = time.time() - start
         num_tokens = len(prompt.split()) + len(response.split())
 
@@ -128,7 +139,8 @@ def zero_shot_small_selecting():
 
     return predictions
 
-def zero_shot_small_comparing():
+# === Chain-of-Thought Comparing ===
+def cot_comparing():
     predictions = []
 
     for idx, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
@@ -148,17 +160,17 @@ def zero_shot_small_comparing():
                 if i == j:
                     continue
                 prompt = f"""
-                Given the anchor product:
-                {anchor_text}
+                Compare the two candidates for the anchor product below.
+                Think step-by-step about their titles, brands, and features.
 
-                Which candidate is a better match?
-                A: {text_i}
-                B: {text_j}
+                Anchor: {anchor_text}
+                Candidate A: {text_i}
+                Candidate B: {text_j}
 
-                Respond with 'A' or 'B'.
+                Which one matches better? Answer 'A' or 'B'.
                 """
-                response = llm(prompt, max_new_tokens=5, truncation=True)[0]['generated_text']
-                if response.strip().startswith('A'):
+                output = llm(prompt, max_new_tokens=20, truncation=True)[0]['generated_text']
+                if output.strip().lower().startswith("a"):
                     votes += 1
             scored.append((votes, candidate_ids[i]))
 
@@ -168,12 +180,13 @@ def zero_shot_small_comparing():
             "idAmazon": a_row['id'],
             "idGoogle": best_candidate_id,
             "prediction": "Yes",
-            "duration": 0,  # time tracking omitted for simplicity
-            "num_tokens": 0  # token tracking omitted for simplicity
+            "duration": 0,
+            "num_tokens": 0
         })
 
     return predictions
 
+# === Run and Evaluate ===
 def run_and_evaluate(strategy_fn, name="Strategy"):
     print(f"\n=== Running {name} ===")
     predictions = strategy_fn()
@@ -202,7 +215,3 @@ def run_and_evaluate(strategy_fn, name="Strategy"):
     print(f"Total Tokens: {total_tokens}")
 
     return pred_df
-
-run_and_evaluate(zero_shot_small_matching, "Zero-Shot Matching")
-run_and_evaluate(zero_shot_small_selecting, "Zero-Shot Selecting")
-run_and_evaluate(zero_shot_small_comparing, "Zero-Shot Comparing")
