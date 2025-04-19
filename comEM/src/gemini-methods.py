@@ -21,8 +21,33 @@ def format_record(row):
 def count_tokens(text):
     return model.count_tokens(text).total_tokens
 
+amazon = pd.read_csv("../datasets/Amazon.csv", encoding='unicode_escape')
+google = pd.read_csv("../datasets/GoogleProducts.csv", encoding='unicode_escape')
+perfect_mapping = pd.read_csv("../datasets/Amzon_GoogleProducts_perfectMapping.csv", encoding='unicode_escape')
+
+ground_truth_matches = set(zip(perfect_mapping['idAmazon'], perfect_mapping['idGoogleBase']))
+
+def to_blocking_text(row):
+    return f"{row.get('title', row.get('name', ''))} {row.get('brand', '')} {row.get('manufacturer', '')}"
+
+amazon['blocking_key'] = amazon.apply(to_blocking_text, axis=1)
+google['blocking_key'] = google.apply(to_blocking_text, axis=1)
+
+def block_records(amazon_record, google_df, threshold=0.3):
+    amazon_tokens = set(str(amazon_record['blocking_key']).lower().split())
+
+    def compute_overlap(row):
+        google_tokens = set(str(row['blocking_key']).lower().split())
+        if not google_tokens:
+            return 0
+        return len(amazon_tokens & google_tokens) / len(amazon_tokens | google_tokens)
+
+    google_df['similarity'] = google_df.apply(compute_overlap, axis=1)
+    candidates = google_df[google_df['similarity'] >= threshold].drop(columns=['similarity'])
+    return candidates
+
 # === Chain-of-Thought Matching ===
-def gemini_cot_matching(amazon, google, block_records):
+def gemini_cot_matching():
     predictions = []
     for _, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
         candidates = block_records(a_row, google)
@@ -55,7 +80,7 @@ def gemini_cot_matching(amazon, google, block_records):
     return predictions
 
 # === Chain-of-Thought Comparing ===
-def gemini_cot_comparing(amazon, google, block_records):
+def gemini_cot_comparing():
     predictions = []
     for _, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
         candidates = block_records(a_row, google)
@@ -99,7 +124,7 @@ def gemini_cot_comparing(amazon, google, block_records):
     return predictions
 
 # === Chain-of-Thought + Chain-of-Verification Selecting ===
-def gemini_cov_selecting(amazon, google, block_records):
+def gemini_cov_selecting():
     predictions = []
     for _, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
         candidates = block_records(a_row, google)
@@ -152,7 +177,7 @@ def gemini_cov_selecting(amazon, google, block_records):
     return predictions
 
 # === Evaluation ===
-def run_and_evaluate(strategy_fn, name, amazon, google, ground_truth_matches, block_records):
+def run_and_evaluate(strategy_fn, name):
     print(f"\n=== Running {name} ===")
     predictions = strategy_fn(amazon, google, block_records)
     pred_df = pd.DataFrame(predictions)
@@ -179,3 +204,7 @@ def run_and_evaluate(strategy_fn, name, amazon, google, ground_truth_matches, bl
     print(f"Total Tokens: {total_tokens}")
 
     return pred_df
+
+run_and_evaluate(gemini_cot_matching, "Chain of Thought Matching with Gemini")
+run_and_evaluate(gemini_cov_selecting, "Chain of Verification + Chain of Thought Selecting")
+run_and_evaluate(gemini_cot_matching, "Chain of THought Comparing with Gemini")

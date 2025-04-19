@@ -24,6 +24,12 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)  # Replace with your actual key
 gemini = genai.GenerativeModel("gemini-2.0-flash-lite-001")
 
+amazon = pd.read_csv("../datasets/Amazon.csv", encoding='unicode_escape')
+google = pd.read_csv("../datasets/GoogleProducts.csv", encoding='unicode_escape')
+perfect_mapping = pd.read_csv("../datasets/Amzon_GoogleProducts_perfectMapping.csv", encoding='unicode_escape')
+
+ground_truth_matches = set(zip(perfect_mapping['idAmazon'], perfect_mapping['idGoogleBase']))
+
 def format_record(row):
     return f"{row.get('title', row.get('name', ''))} {row.get('brand', '')} {row.get('manufacturer', '')}"
 
@@ -151,3 +157,5 @@ def evaluate_predictions(pred_df, ground_truth_matches, name="comEM"):
     print(f"Total Time: {pred_df['duration'].sum():.2f} seconds")
     print(f"Total Tokens: {pred_df['num_tokens'].sum()}")
     return pred_df
+
+evaluate_predictions(run_comem_pipeline(amazon, google, ground_truth_matches), ground_truth_matches)

@@ -215,3 +215,7 @@ def run_and_evaluate(strategy_fn, name="Strategy"):
     print(f"Total Tokens: {total_tokens}")
 
     return pred_df
+
+run_and_evaluate(cot_matching, "Chain-Of-Thought Matching")
+run_and_evaluate(cot_selecting, "Chain-Of-Thought Selecting")
+run_and_evaluate(cot_comparing, "Chain-Of-Thought Comparing")

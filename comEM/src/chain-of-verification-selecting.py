@@ -141,3 +141,5 @@ def run_and_evaluate(strategy_fn, name="Strategy"):
     print(f"Total Tokens: {total_tokens}")
 
     return pred_df
+
+run_and_evaluate(cov_selecting, "Chain-of-Verification")
