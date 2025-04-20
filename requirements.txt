@@ -2,3 +2,5 @@ google-generativeai
 python-dotenv
 transformers
 torch
+pydantic
+fastapi
