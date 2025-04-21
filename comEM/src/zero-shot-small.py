@@ -6,7 +6,7 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import torch
 
 # === Load your local model ===
-model_name = "google/flan-t5-small"  # Or larger if your GPU allows
+model_name = "declare-lab/flan-alpaca-base"
 print("Loading model...")
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to("cuda")
