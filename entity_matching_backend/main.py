@@ -1,11 +1,24 @@
-# One-off Entity Matching API (Single Record Based on User Request)
 from fastapi import FastAPI, Body
+from fastapi.middleware.cors import CORSMiddleware
+# One-off Entity Matching API (Single Record Based on User Request)
 from pydantic import BaseModel
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import google.generativeai as genai
 import time
+from typing import Optional, List
 
+
+app = FastAPI()
+
+# 👇 CORS should go here, immediately after app is created
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # React frontend origin
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # === Model Setup ===
 models = {
     "small": "google/flan-t5-base",
@@ -32,10 +45,11 @@ app = FastAPI()
 
 class MatchRequest(BaseModel):
     size: str  # 'small', 'medium', or 'large'
-    task: str  # 'matching', 'comparing', 'selecting'
+    task: str  # 'matching', 'comparing', or 'selecting'
     anchor: str
-    candidate: str | None = None  # Optional for selecting
-    candidates: list[str] | None = None
+    candidate: Optional[str] = None  # Optional for matching
+    candidates: Optional[List[str]] = None  # Optional for selecting/comparing
+
 
 # === Prompt Functions ===
 def prompt_matching(anchor, candidate):
@@ -123,3 +137,4 @@ def entity_match(request: MatchRequest):
         "model": size,
         "task": task
     }
+
