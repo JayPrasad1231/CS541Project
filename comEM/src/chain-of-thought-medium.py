@@ -12,12 +12,12 @@ import torch
 model_name = "NousResearch/hermes-1-mistral"
 print("Loading model...")
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCasualLM.from_pretrained(model_name, device_map="auto")
+model = AutoModelForCasualLM.from_pretrained(model_name, device_map="auto").to("cuda")
 llm = pipeline("text-generation", model=model, tokenizer=tokenizer, batch_size=16, device=0)
 
-amazon = pd.read_csv("Amazon.csv", encoding='unicode_escape')
-google = pd.read_csv("GoogleProducts.csv", encoding='unicode_escape')
-perfect_mapping = pd.read_csv("Amzon_GoogleProducts_perfectMapping.csv", encoding='unicode_escape')
+amazon = pd.read_csv("../dataset1/Amazon.csv", encoding='unicode_escape')
+google = pd.read_csv("../dataset1/GoogleProducts.csv", encoding='unicode_escape')
+perfect_mapping = pd.read_csv("../dataset1/Amzon_GoogleProducts_perfectMapping.csv", encoding='unicode_escape')
 
 ground_truth_matches = set(zip(perfect_mapping['idAmazon'], perfect_mapping['idGoogleBase']))
 

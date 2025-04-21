@@ -12,12 +12,12 @@ import torch
 model_name = "declare-lab/flan-alpaca-base"
 print("Loading model...")
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to("cuda")
 llm = pipeline("text2text-generation", model=model, tokenizer=tokenizer, batch_size = 16, device=0)
 
-amazon = pd.read_csv("Amazon.csv", encoding='unicode_escape')
-google = pd.read_csv("GoogleProducts.csv", encoding='unicode_escape')
-perfect_mapping = pd.read_csv("Amzon_GoogleProducts_perfectMapping.csv", encoding='unicode_escape')
+amazon = pd.read_csv("../dataset1/Amazon.csv", encoding='unicode_escape')
+google = pd.read_csv("../dataset1/GoogleProducts.csv", encoding='unicode_escape')
+perfect_mapping = pd.read_csv("../dataset1/Amzon_GoogleProducts_perfectMapping.csv", encoding='unicode_escape')
 
 ground_truth_matches = set(zip(perfect_mapping['idAmazon'], perfect_mapping['idGoogleBase']))
 
