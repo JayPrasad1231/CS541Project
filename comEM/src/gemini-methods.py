@@ -47,10 +47,12 @@ def block_records(amazon_record, google_df, threshold=0.3):
     return candidates
 
 # === Chain-of-Thought Matching ===
-def gemini_cot_matching():
-    predictions = []
-    for _, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
-        candidates = block_records(a_row, google)
+def gemini_cot_matching(amazon_df, google_df, block_fn):
+    prompts = []
+    metadata = []
+
+    for _, a_row in tqdm(amazon_df.iterrows(), total=len(amazon_df)):
+        candidates = block_fn(a_row, google_df)
         anchor_text = format_record(a_row)
 
         for _, g_row in candidates.iterrows():
@@ -64,70 +66,35 @@ def gemini_cot_matching():
 
             Final Answer: Yes or No.
             """
-            start = time.time()
-            response = model.generate_content(prompt)
-            duration = time.time() - start
-            num_tokens = count_tokens(prompt + response.text)
+            prompts.append(prompt)
+            metadata.append((a_row['id'], g_row['id']))
 
-            predictions.append({
-                "idAmazon": a_row['id'],
-                "idGoogle": g_row['id'],
-                "prediction": "Yes" if "yes" in response.text.lower() else "No",
-                "duration": duration,
-                "num_tokens": num_tokens
-            })
-
-    return predictions
-
-# === Chain-of-Thought Comparing ===
-def gemini_cot_comparing():
     predictions = []
-    for _, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
-        candidates = block_records(a_row, google)
-        if len(candidates) < 2:
-            continue
+    for prompt, (idAmazon, idGoogle) in tqdm(zip(prompts, metadata), total=len(prompts)):
+        start = time.time()
+        response = model.generate_content(prompt)
+        duration = time.time() - start
+        num_tokens = count_tokens(prompt + response.text)
 
-        anchor_text = format_record(a_row)
-        candidate_ids = [row['id'] for _, row in candidates.iterrows()]
-        candidate_texts = [format_record(row) for _, row in candidates.iterrows()]
+        prediction = "Yes" if "yes" in response.text.lower() else "No"
 
-        scored = []
-        for i, text_i in enumerate(candidate_texts):
-            votes = 0
-            for j, text_j in enumerate(candidate_texts):
-                if i == j:
-                    continue
-                prompt = f"""
-                Compare the following two candidates for the given anchor product.
-                Think step-by-step based on title, brand, and manufacturer.
-
-                Anchor: {anchor_text}
-                Candidate A: {text_i}
-                Candidate B: {text_j}
-
-                Which matches better? Answer 'A' or 'B'.
-                """
-                response = model.generate_content(prompt)
-                if response.text.strip().lower().startswith('a'):
-                    votes += 1
-            scored.append((votes, candidate_ids[i]))
-
-        best_candidate = max(scored)[1]
         predictions.append({
-            "idAmazon": a_row['id'],
-            "idGoogle": best_candidate,
-            "prediction": "Yes",
-            "duration": 0,
-            "num_tokens": 0
+            "idAmazon": idAmazon,
+            "idGoogle": idGoogle,
+            "prediction": prediction,
+            "duration": duration,
+            "num_tokens": num_tokens
         })
 
     return predictions
 
-# === Chain-of-Thought + Chain-of-Verification Selecting ===
-def gemini_cov_selecting():
-    predictions = []
-    for _, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
-        candidates = block_records(a_row, google)
+
+def gemini_cov_selecting(amazon_df, google_df, block_fn):
+    prompts = []
+    metadata = []
+
+    for _, a_row in tqdm(amazon_df.iterrows(), total=len(amazon_df)):
+        candidates = block_fn(a_row, google_df)
         if candidates.empty:
             continue
 
@@ -144,6 +111,11 @@ def gemini_cov_selecting():
         Candidates:
         """ + "\n".join([f"{i+1}. {text}" for i, text in enumerate(candidate_texts)]) + "\n\nProvide reasoning and then state the number of the best match, or 0 if none match."
 
+        prompts.append(prompt)
+        metadata.append((a_row['id'], candidate_ids))
+
+    predictions = []
+    for prompt, (idAmazon, candidate_ids) in tqdm(zip(prompts, metadata), total=len(prompts)):
         start = time.time()
         response = model.generate_content(prompt)
         duration = time.time() - start
@@ -157,22 +129,68 @@ def gemini_cov_selecting():
             selected_index = 0
 
         if 1 <= selected_index <= len(candidate_ids):
-            selected_id = candidate_ids[selected_index - 1]
-            predictions.append({
-                "idAmazon": a_row['id'],
-                "idGoogle": selected_id,
-                "prediction": "Yes",
-                "duration": duration,
-                "num_tokens": num_tokens
-            })
+            idGoogle = candidate_ids[selected_index - 1]
+            prediction = "Yes"
         else:
-            predictions.append({
-                "idAmazon": a_row['id'],
-                "idGoogle": None,
-                "prediction": "No Match",
-                "duration": duration,
-                "num_tokens": num_tokens
-            })
+            idGoogle = None
+            prediction = "No Match"
+
+        predictions.append({
+            "idAmazon": idAmazon,
+            "idGoogle": idGoogle,
+            "prediction": prediction,
+            "duration": duration,
+            "num_tokens": num_tokens
+        })
+
+    return predictions
+
+
+def gemini_cot_comparing(amazon_df, google_df, block_fn):
+    predictions = []
+    for _, a_row in tqdm(amazon_df.iterrows(), total=len(amazon_df)):
+        candidates = block_fn(a_row, google_df)
+        if len(candidates) < 2:
+            continue
+
+        anchor_text = format_record(a_row)
+        candidate_ids = [row['id'] for _, row in candidates.iterrows()]
+        candidate_texts = [format_record(row) for _, row in candidates.iterrows()]
+
+        prompts = []
+        comparisons = []
+
+        for i, text_i in enumerate(candidate_texts):
+            for j, text_j in enumerate(candidate_texts):
+                if i == j:
+                    continue
+                prompt = f"""
+                Compare the following two candidates for the given anchor product.
+                Think step-by-step based on title, brand, and manufacturer.
+
+                Anchor: {anchor_text}
+                Candidate A: {text_i}
+                Candidate B: {text_j}
+
+                Which matches better? Answer 'A' or 'B'.
+                """
+                prompts.append(prompt)
+                comparisons.append((i, j))
+
+        votes = [0] * len(candidate_texts)
+        for prompt, (i, j) in zip(prompts, comparisons):
+            response = model.generate_content(prompt)
+            if response.text.strip().lower().startswith("a"):
+                votes[i] += 1
+
+        best_index = votes.index(max(votes))
+        predictions.append({
+            "idAmazon": a_row['id'],
+            "idGoogle": candidate_ids[best_index],
+            "prediction": "Yes",
+            "duration": 0,
+            "num_tokens": 0
+        })
 
     return predictions
 

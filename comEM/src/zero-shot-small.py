@@ -40,44 +40,45 @@ def block_records(amazon_record, google_df, threshold=0.3):
 def format_record(row):
     return f"{row.get('title', row.get('name', ''))} {row.get('brand', '')} {row.get('manufacturer', '')}"
 
-def query_llm(anchor, candidate):
-    prompt = f"""
-    Are the following two product records referring to the same entity? Answer with only 'Yes' or 'No'.
-
-    Record 1: {anchor}
-    Record 2: {candidate}
-    """
-    start = time.time()
-    output = llm(prompt, max_new_tokens=5, truncation=True)[0]['generated_text']
-    duration = time.time() - start
-    return output.strip(), len(prompt.split()), duration
-
-
 def zero_shot_small_matching():
+    prompts = []
+    meta = []
 
-    predictions = []
     for idx, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
         candidates = block_records(a_row, google)
         anchor_text = format_record(a_row)
 
         for _, g_row in candidates.iterrows():
             candidate_text = format_record(g_row)
-            pred, num_tokens, duration = query_llm(anchor_text, candidate_text)
+            prompt = f"""
+            Are the following two product records referring to the same entity? Answer with only 'Yes' or 'No'.
 
-            predictions.append({
-                "idAmazon": a_row['id'],
-                "idGoogle": g_row['id'],
-                "prediction": pred,
-                "duration": duration,
-                "num_tokens": num_tokens
-            })
+            Record 1: {anchor_text}
+            Record 2: {candidate_text}
+            """
+            prompts.append(prompt)
+            meta.append((a_row['id'], g_row['id']))
+
+    sequences = llm(prompts, max_new_tokens=10, batch_size=16)
+
+    predictions = []
+    for (a_id, g_id), result, prompt in zip(meta, sequences, prompts):
+        output = result['generated_text'].strip().lower()
+        prediction = "Yes" if output.startswith("yes") else "No"
+        predictions.append({
+            "idAmazon": a_id,
+            "idGoogle": g_id,
+            "prediction": prediction,
+            "duration": 0,
+            "num_tokens": len(prompt.split()) + len(output.split())
+        })
 
     return predictions
 
-zero_shot_small_matching()
 
 def zero_shot_small_selecting():
-    predictions = []
+    prompts = []
+    meta = []
 
     for idx, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
         candidates = block_records(a_row, google)
@@ -97,39 +98,44 @@ def zero_shot_small_selecting():
 
         Candidates:
         """ + "\n".join([f"{i+1}. {text}" for i, text in enumerate(candidate_texts)]) + "\n\nAnswer:"
+        
+        prompts.append(prompt)
+        meta.append((a_row['id'], candidate_ids))
 
-        start = time.time()
-        response = llm(prompt, max_new_tokens=5, truncation=True)[0]['generated_text']
-        duration = time.time() - start
-        num_tokens = len(prompt.split()) + len(response.split())
+    sequences = llm(prompts, max_new_tokens=10, batch_size=16)
 
+    predictions = []
+    for (a_id, candidate_ids), result, prompt in zip(meta, sequences, prompts):
+        output = result['generated_text'].strip()
         try:
-            selected_index = int(response.strip())
+            selected_index = int(output)
         except:
             selected_index = 0
 
         if 1 <= selected_index <= len(candidate_ids):
             selected_id = candidate_ids[selected_index - 1]
             predictions.append({
-                "idAmazon": a_row['id'],
+                "idAmazon": a_id,
                 "idGoogle": selected_id,
                 "prediction": "Yes",
-                "duration": duration,
-                "num_tokens": num_tokens
+                "duration": 0,
+                "num_tokens": len(prompt.split()) + len(output.split())
             })
         else:
             predictions.append({
-                "idAmazon": a_row['id'],
+                "idAmazon": a_id,
                 "idGoogle": None,
                 "prediction": "No Match",
-                "duration": duration,
-                "num_tokens": num_tokens
+                "duration": 0,
+                "num_tokens": len(prompt.split()) + len(output.split())
             })
 
     return predictions
 
+
 def zero_shot_small_comparing():
-    predictions = []
+    prompts = []
+    meta = []
 
     for idx, a_row in tqdm(amazon.iterrows(), total=len(amazon)):
         candidates = block_records(a_row, google)
@@ -137,14 +143,12 @@ def zero_shot_small_comparing():
             continue
 
         anchor_text = format_record(a_row)
-        candidate_pairs = list(candidates.iterrows())
-        candidate_ids = [row['id'] for _, row in candidate_pairs]
-        candidate_texts = [format_record(row) for _, row in candidate_pairs]
+        candidate_list = list(candidates.iterrows())
+        candidate_ids = [row['id'] for _, row in candidate_list]
+        candidate_texts = [format_record(row) for _, row in candidate_list]
 
-        scored = []
-        for i, text_i in enumerate(candidate_texts):
-            votes = 0
-            for j, text_j in enumerate(candidate_texts):
+        for i in range(len(candidate_texts)):
+            for j in range(len(candidate_texts)):
                 if i == j:
                     continue
                 prompt = f"""
@@ -152,27 +156,37 @@ def zero_shot_small_comparing():
                 {anchor_text}
 
                 Which candidate is a better match?
-                A: {text_i}
-                B: {text_j}
+                A: {candidate_texts[i]}
+                B: {candidate_texts[j]}
 
                 Respond with 'A' or 'B'.
                 """
-                response = llm(prompt, max_new_tokens=5, truncation=True)[0]['generated_text']
-                if response.strip().startswith('A'):
-                    votes += 1
-            scored.append((votes, candidate_ids[i]))
+                prompts.append(prompt)
+                meta.append((a_row['id'], candidate_ids[i]))
 
-        scored.sort(reverse=True)
-        best_candidate_id = scored[0][1]
+    sequences = llm(prompts, max_new_tokens=10, batch_size=16)
+
+    from collections import defaultdict
+    vote_map = defaultdict(lambda: defaultdict(int))
+
+    for (anchor_id, candidate_id), result, prompt in zip(meta, sequences, prompts):
+        output = result['generated_text'].strip().lower()
+        if output.startswith("a"):
+            vote_map[anchor_id][candidate_id] += 1
+
+    predictions = []
+    for anchor_id, candidate_votes in vote_map.items():
+        best_candidate_id = max(candidate_votes.items(), key=lambda x: x[1])[0]
         predictions.append({
-            "idAmazon": a_row['id'],
+            "idAmazon": anchor_id,
             "idGoogle": best_candidate_id,
             "prediction": "Yes",
-            "duration": 0,  # time tracking omitted for simplicity
-            "num_tokens": 0  # token tracking omitted for simplicity
+            "duration": 0,
+            "num_tokens": 0
         })
 
     return predictions
+
 
 def run_and_evaluate(strategy_fn, name="Strategy"):
     print(f"\n=== Running {name} ===")

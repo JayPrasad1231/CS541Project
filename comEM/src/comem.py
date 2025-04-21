@@ -1,4 +1,4 @@
-# comEM Pipeline: Blocking → Matching/Comparing (Small LLM) → Selecting (Gemini with CoT)
+# comEM Pipeline: Blocking → Matching/Comparing (Small LLM, Batched) → Selecting (Gemini with CoT)
 import pandas as pd
 import time
 from tqdm import tqdm
@@ -12,31 +12,30 @@ import os
 load_dotenv(find_dotenv())
 
 # === Config ===
-model_name = "google/flan-t5-base"  # small LLM for matching/comparing
-print("Loading small model...")
+model_name = "declare-lab/flan-alpaca-base"
+print("Loading model...")
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-small_model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to("cuda")
-small_llm = pipeline("text2text-generation", model=small_model, tokenizer=tokenizer, device=0)
+model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to("cuda")
+llm = pipeline("text2text-generation", model=model, tokenizer=tokenizer, batch_size = 16, device=0)
 
 # Gemini setup
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-
-genai.configure(api_key=GOOGLE_API_KEY)  # Replace with your actual key
+genai.configure(api_key=GOOGLE_API_KEY)
 gemini = genai.GenerativeModel("gemini-2.0-flash-lite-001")
 
+# === Data ===
 amazon = pd.read_csv("../datasets/Amazon.csv", encoding='unicode_escape')
 google = pd.read_csv("../datasets/GoogleProducts.csv", encoding='unicode_escape')
 perfect_mapping = pd.read_csv("../datasets/Amzon_GoogleProducts_perfectMapping.csv", encoding='unicode_escape')
-
 ground_truth_matches = set(zip(perfect_mapping['idAmazon'], perfect_mapping['idGoogleBase']))
 
+# === Utilities ===
 def format_record(row):
     return f"{row.get('title', row.get('name', ''))} {row.get('brand', '')} {row.get('manufacturer', '')}"
 
 def count_tokens(text):
     return gemini.count_tokens(text).total_tokens
 
-# === Blocking ===
 def to_blocking_text(row):
     return f"{row.get('title', row.get('name', ''))} {row.get('brand', '')} {row.get('manufacturer', '')}"
 
@@ -51,32 +50,33 @@ def block_records(amazon_record, google_df, threshold=0.3):
     candidates = google_df[google_df['similarity'] >= threshold].drop(columns=['similarity'])
     return candidates
 
-# === Step 1: Matching or Comparing (Small LLM with CoT) ===
-def small_llm_matching(anchor_text, candidate_text):
-    prompt = f"""
-    Do the following two product records refer to the same entity?
-    Think step-by-step about the title, brand, and manufacturer.
+# === Step 1: Matching/Comparing with Batched Small LLM ===
+def batch_small_llm_matching(anchor_text, candidate_texts):
+    prompts = [
+        f"""Do the following two product records refer to the same entity?
+Think step-by-step about the title, brand, and manufacturer.
 
-    Product A: {anchor_text}
-    Product B: {candidate_text}
+Product A: {anchor_text}
+Product B: {candidate_text}
 
-    Final answer: Yes or No.
-    """
-    output = small_llm(prompt, max_new_tokens=20, truncation=True)[0]['generated_text']
-    return output.strip(), prompt
+Final answer: Yes or No.""" for candidate_text in candidate_texts
+    ]
+    outputs = small_llm(prompts, max_new_tokens=20, batch_size=16, truncation=True)
+    responses = [out['generated_text'].strip() for out in outputs]
+    return responses
 
-# === Step 2: Selecting (Gemini with CoT) ===
+# === Step 2: Selecting with Gemini CoT ===
 def gemini_select(anchor_text, top_candidates):
     candidate_texts = [format_record(row) for row in top_candidates]
     candidate_ids = [row['id'] for row in top_candidates]
 
     prompt = f"""
-    You are given a product and a list of candidates. Analyze each candidate step-by-step and choose the best match.
+You are given a product and a list of candidates. Analyze each candidate step-by-step and choose the best match.
 
-    Product: {anchor_text}
+Product: {anchor_text}
 
-    Candidates:
-    """ + "\n".join([f"{i+1}. {text}" for i, text in enumerate(candidate_texts)]) + "\n\nRespond with reasoning and end with 'Answer: X' where X is the best match or 0 for no match."
+Candidates:
+""" + "\n".join([f"{i+1}. {text}" for i, text in enumerate(candidate_texts)]) + "\n\nRespond with reasoning and end with 'Answer: X' where X is the best match or 0 for no match."
 
     start = time.time()
     response = gemini.generate_content(prompt)
@@ -106,13 +106,15 @@ def run_comem_pipeline(amazon, google, ground_truth_matches):
             continue
 
         anchor_text = format_record(a_row)
-        top_candidates = []
+        candidate_texts = [format_record(g_row) for _, g_row in candidates.iterrows()]
+        candidate_rows = [g_row for _, g_row in candidates.iterrows()]
 
-        for _, g_row in candidates.iterrows():
-            candidate_text = format_record(g_row)
-            pred, prompt = small_llm_matching(anchor_text, candidate_text)
-            if "yes" in pred.lower():
-                top_candidates.append(g_row)
+        responses = batch_small_llm_matching(anchor_text, candidate_texts)
+
+        top_candidates = [
+            row for response, row in zip(responses, candidate_rows)
+            if "yes" in response.lower()
+        ]
 
         if not top_candidates:
             predictions.append({
@@ -158,4 +160,5 @@ def evaluate_predictions(pred_df, ground_truth_matches, name="comEM"):
     print(f"Total Tokens: {pred_df['num_tokens'].sum()}")
     return pred_df
 
+# === Run Pipeline ===
 evaluate_predictions(run_comem_pipeline(amazon, google, ground_truth_matches), ground_truth_matches)

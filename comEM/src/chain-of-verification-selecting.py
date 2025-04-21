@@ -1,26 +1,25 @@
-# Chain of Verification (CoV) - Selecting Strategy Only
-# Requires shared context: model, amazon/google tables, blocking, etc.
-
+# Chain of Verification (CoV) - Using Hermes Mistral for Selecting Only
 import pandas as pd
 import time
 from tqdm import tqdm
 from sklearn.metrics import precision_recall_fscore_support
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import torch
 
-# === Load your local model ===
-model_name = "google/flan-t5-base"  # Or larger if your GPU allows
+# === Load Hermes-1 Mistral ===
+model_name = "NousResearch/hermes-1-mistral"
 print("Loading model...")
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to("cuda")
-llm = pipeline("text2text-generation", model=model, tokenizer=tokenizer, device=0)
+model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto").to("cuda")
+llm = pipeline("text-generation", model=model, tokenizer=tokenizer, device=0)
 
+# === Load Data ===
 amazon = pd.read_csv("../datasets/Amazon.csv", encoding='unicode_escape')
 google = pd.read_csv("../datasets/GoogleProducts.csv", encoding='unicode_escape')
 perfect_mapping = pd.read_csv("../datasets/Amzon_GoogleProducts_perfectMapping.csv", encoding='unicode_escape')
-
 ground_truth_matches = set(zip(perfect_mapping['idAmazon'], perfect_mapping['idGoogleBase']))
 
+# === Helper Functions ===
 def to_blocking_text(row):
     return f"{row.get('title', row.get('name', ''))} {row.get('brand', '')} {row.get('manufacturer', '')}"
 
@@ -43,19 +42,6 @@ def block_records(amazon_record, google_df, threshold=0.3):
 def format_record(row):
     return f"{row.get('title', row.get('name', ''))} {row.get('brand', '')} {row.get('manufacturer', '')}"
 
-def query_llm(anchor, candidate):
-    prompt = f"""
-    Are the following two product records referring to the same entity? Answer with only 'Yes' or 'No'.
-
-    Record 1: {anchor}
-    Record 2: {candidate}
-    """
-    start = time.time()
-    output = llm(prompt, max_new_tokens=5, truncation=True)[0]['generated_text']
-    duration = time.time() - start
-    return output.strip(), len(prompt.split()), duration
-
-
 # === Chain-of-Verification Selecting ===
 def cov_selecting():
     predictions = []
@@ -69,24 +55,23 @@ def cov_selecting():
         candidate_texts = [format_record(g_row) for _, g_row in candidates.iterrows()]
         candidate_ids = [g_row['id'] for _, g_row in candidates.iterrows()]
 
-        # Step 1: Verification reasoning
-        verification_prompt = f"""
-        Analyze the following product and candidate list. For each candidate, reason about whether it refers to the same entity as the anchor.
-        Think about title, brand, and manufacturer. List reasoning for each, then make a final decision.
+        # Step 1: Verification reasoning prompt
+        verification_prompt = f"""Analyze the following product and candidate list. For each candidate, reason about whether it refers to the same entity as the anchor.
+Think about title, brand, and manufacturer. List reasoning for each, then make a final decision.
 
-        Anchor Product: {anchor_text}
+Anchor Product: {anchor_text}
 
-        Candidates:
-        """ + "\n".join([f"{i+1}. {text}" for i, text in enumerate(candidate_texts)]) + "\n\nRespond with reasoning for each and finally: 'Answer: X' where X is the number or 0 if none match."
+Candidates:
+""" + "\n".join([f"{i+1}. {text}" for i, text in enumerate(candidate_texts)]) + "\n\nRespond with reasoning for each and finally: 'Answer: X' where X is the number or 0 if none match."
 
         start = time.time()
-        response = llm(verification_prompt, max_new_tokens=100, truncation=True)[0]['generated_text']
+        output = llm(verification_prompt, max_new_tokens=300, truncation=True)[0]['generated_text']
         duration = time.time() - start
-        num_tokens = len(verification_prompt.split()) + len(response.split())
+        num_tokens = len(verification_prompt.split()) + len(output.split())
 
         # Step 2: Extract decision
         try:
-            lines = response.strip().split("\n")
+            lines = output.strip().split("\n")
             answer_line = next(line for line in lines if "answer:" in line.lower())
             selected_index = int(''.join(filter(str.isdigit, answer_line.strip())))
         except:
@@ -134,12 +119,10 @@ def run_and_evaluate(strategy_fn, name="Strategy"):
     precision, recall, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='binary')
 
     print(f"{name} → Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
-
-    total_time = sum(p['duration'] for p in predictions)
-    total_tokens = sum(p['num_tokens'] for p in predictions)
-    print(f"Total Time: {total_time:.2f} seconds")
-    print(f"Total Tokens: {total_tokens}")
+    print(f"Total Time: {sum(p['duration'] for p in predictions):.2f} seconds")
+    print(f"Total Tokens: {sum(p['num_tokens'] for p in predictions)}")
 
     return pred_df
 
-run_and_evaluate(cov_selecting, "Chain-of-Verification")
+# === Execute ===
+run_and_evaluate(cov_selecting, "Chain-of-Verification (Hermes)")
