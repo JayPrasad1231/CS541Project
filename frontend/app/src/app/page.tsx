@@ -4,12 +4,13 @@ import { motion } from "framer-motion";
 import React, { useEffect, useState, useRef } from 'react';
 import axios, { AxiosError } from "axios";
 import redPfp from "../imgs/red.png";
-import glumbus_subtubbo from "../imgs/gs.png"
+import glumbus_subtubbo from "../imgs/gs.png";
 import { v4 as uuidv4 } from "uuid";
 
 type Step =
   | "size"
   | "task"
+  | "background"
   | "anchor"
   | "candidate"
   | "candidates"
@@ -21,11 +22,14 @@ type ChatMessage = {
   type: "user" | "bot";
   text: string;
 };
-  
 
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: uuidv4(), type: "bot", text: "Welcome! Let's start — what model size would you like? (small, medium, large)" },
+    {
+      id: uuidv4(),
+      type: "bot",
+      text: "Welcome! Let's start — what model size would you like? (small, medium, large)",
+    },
   ]);
 
   const [step, setStep] = useState<Step>("size");
@@ -35,18 +39,15 @@ export default function Home() {
   const [anchor, setAnchor] = useState<string>("");
   const [candidate, setCandidate] = useState<string>("");
   const [candidates, setCandidates] = useState<string[]>([]);
+  const [background, setBackground] = useState<string | null>(null);
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  
-  // Use useRef to maintain animated messages across renders
+
   const animatedMessagesRef = useRef<Set<string>>(new Set());
-  
-  // Ref for scrolling container
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
-  // Auto scroll to bottom whenever messages change
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
@@ -64,6 +65,7 @@ export default function Home() {
     size: "small" | "medium" | "large";
     task: "matching" | "comparing" | "selecting";
     anchor: string;
+    background?: string | null;
     candidate?: string;
     candidates?: string[];
   };
@@ -97,10 +99,11 @@ export default function Home() {
       size,
       task,
       anchor,
+      background,
       ...(task === "matching" && { candidate }),
       ...(task !== "matching" && { candidates }),
     };
-  
+
     try {
       const res = await axios.post("http://localhost:8000/entity-match", payload);
       addMessage({
@@ -116,9 +119,33 @@ export default function Home() {
     }
   };
 
+  const resetConversation = () => {
+    setMessages([
+      {
+        id: uuidv4(),
+        type: "bot",
+        text: "Welcome! Let's start — what model size would you like? (small, medium, large)",
+      },
+    ]);
+    setStep("size");
+    setSize("small");
+    setTask("matching");
+    setAnchor("");
+    setCandidate("");
+    setCandidates([]);
+    setBackground(null);
+    setInput("");
+    animatedMessagesRef.current.clear();
+  };
+
   const handleNext = () => {
     const trimmed = input.trim();
     if (!trimmed) return;
+
+    if (trimmed.toLowerCase() === "restart") {
+      resetConversation();
+      return;
+    }
 
     addMessage({ type: "user", text: trimmed });
 
@@ -136,11 +163,20 @@ export default function Home() {
       case "task":
         if (["matching", "comparing", "selecting"].includes(trimmed)) {
           setTask(trimmed as any);
-          addMessage({ type: "bot", text: "Perfect. Now enter the anchor product description." });
-          setStep("anchor");
+          addMessage({ type: "bot", text: "Optional: Enter any background context or type 'none'." });
+          setStep("background");
         } else {
           addMessage({ type: "bot", text: "Please enter: matching, comparing, or selecting." });
         }
+        break;
+
+      case "background":
+        setBackground(trimmed.toLowerCase() === "none" ? null : trimmed);
+        addMessage({
+          type: "bot",
+          text: "Perfect. Now enter the anchor product description.",
+        });
+        setStep("anchor");
         break;
 
       case "anchor":
@@ -182,7 +218,7 @@ export default function Home() {
         break;
 
       case "response":
-        addMessage({ type: "bot", text: "Conversation ended. Refresh to restart." });
+        addMessage({ type: "bot", text: "Conversation ended. Type 'restart' to begin again." });
         break;
     }
 
@@ -196,65 +232,32 @@ export default function Home() {
     }
   };
 
-  // Framer motion animation variants
   const bounceVariants = {
-    initial: { 
-      scale: 0.8, 
-      opacity: 0 
-    },
-    animate: { 
-      scale: 1, 
+    initial: { scale: 0.8, opacity: 0 },
+    animate: {
+      scale: 1,
       opacity: 1,
-      transition: {
-        type: "spring",
-        stiffness: 260,
-        damping: 20
-      }
-    }
+      transition: { type: "spring", stiffness: 260, damping: 20 },
+    },
   };
 
   return (
     <div className="flex flex-col h-screen w-full">
       <div className="flex items-center justify-center bg-gradient-to-r from-amber-500 to-amber-700 shadow-md">
         <div className="flex items-center py-4 px-6">
-          <svg 
-            className="w-10 h-10 mr-3 text-white" 
-            fill="none" 
-            stroke="currentColor" 
-            viewBox="0 0 24 24" 
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <path 
-              strokeLinecap="round" 
-              strokeLinejoin="round" 
-              strokeWidth={2} 
-              d="M13 10V3L4 14h7v7l9-11h-7z" 
-            />
+          <svg className="w-10 h-10 mr-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
-          <h1 className="text-3xl font-semibold text-white tracking-tight">
-            Entity Matching Bot
-          </h1>
+          <h1 className="text-3xl font-semibold text-white tracking-tight">Entity Matching Bot</h1>
         </div>
       </div>
-      
-      {/* Card Container */}
+
       <div className="flex-1 flex items-center justify-center p-4 md:p-8">
         <div className="bg-white rounded-xl shadow-lg w-full max-w-4xl flex flex-col" style={{ height: "85vh" }}>
-          {/* Chat Container */}
-          <div 
-            ref={chatContainerRef}
-            className="flex-1 overflow-y-auto px-4 py-6"
-          >
-            {/* Bot Profile Header */}
+          <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 py-6">
             <div className="flex flex-col items-center justify-center mb-8">
               <div className="border-4 border-slate-950 rounded-full p-1 shadow-lg">
-                <Image
-                  src={glumbus_subtubbo}
-                  alt="Mr. Bot"
-                  width={120}
-                  height={120}
-                  className="rounded-full"
-                />
+                <Image src={glumbus_subtubbo} alt="Mr. Bot" width={120} height={120} className="rounded-full" />
               </div>
               <h2 className="text-2xl font-bold mt-4 text-amber-600">Conversation with Mr. Bot</h2>
             </div>
@@ -263,19 +266,11 @@ export default function Home() {
               {messages.map((msg) => (
                 <div
                   key={msg.id}
-                  className={`flex items-end gap-3 ${
-                    msg.type === "user" ? "justify-end" : "justify-start"
-                  }`}
+                  className={`flex items-end gap-3 ${msg.type === "user" ? "justify-end" : "justify-start"}`}
                 >
                   {msg.type === "bot" && (
                     <div className="flex-shrink-0 border-2 border-black rounded-full self-end">
-                      <Image
-                        src={glumbus_subtubbo}
-                        alt="bot avatar"
-                        width={60}
-                        height={60}
-                        className="rounded-full"
-                      />
+                      <Image src={glumbus_subtubbo} alt="bot avatar" width={60} height={60} className="rounded-full" />
                     </div>
                   )}
                   <motion.div
@@ -296,13 +291,7 @@ export default function Home() {
                   </motion.div>
                   {msg.type === "user" && (
                     <div className="flex-shrink-0 border-2 border-black rounded-full self-end">
-                      <Image
-                        src={redPfp}
-                        alt="user avatar"
-                        width={60}
-                        height={60}
-                        className="rounded-full"
-                      />
+                      <Image src={redPfp} alt="user avatar" width={60} height={60} className="rounded-full" />
                     </div>
                   )}
                 </div>
@@ -319,12 +308,10 @@ export default function Home() {
                   </motion.div>
                 </div>
               )}
-              {/* This empty div is our scroll target */}
               <div ref={messagesEndRef} />
             </div>
           </div>
 
-          {/* Input Area */}
           <div className="border-t bg-gray-50 p-4 rounded-b-xl">
             <div className="flex items-end gap-3">
               <textarea
@@ -336,13 +323,7 @@ export default function Home() {
                 className="flex-1 border-2 border-black text-xl text-amber-600 rounded-md p-3 focus:outline-none focus:border-transparent focus:ring-2 focus:ring-amber-600 resize-none"
               />
               <div className="border-2 border-black rounded-full">
-                <Image
-                  src={redPfp}
-                  alt="user"
-                  width={80}
-                  height={80}
-                  className="rounded-full"
-                />
+                <Image src={redPfp} alt="user" width={80} height={80} className="rounded-full" />
               </div>
             </div>
           </div>

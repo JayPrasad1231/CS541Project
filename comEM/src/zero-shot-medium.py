@@ -8,7 +8,7 @@ import torch
 from collections import defaultdict
 
 # === Load Hermes model ===
-model_name = "NousResearch/hermes-1-mistral"
+model_name = "google/flan-t5-large"
 print("Loading model...")
 
 tokenizer = AutoTokenizer.from_pretrained(model_name)
