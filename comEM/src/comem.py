@@ -12,7 +12,7 @@ import os
 load_dotenv(find_dotenv())
 
 # === Config ===
-model_name = "declare-lab/flan-alpaca-base"
+model_name = "google/flan-t5-large"
 print("Loading model...")
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to("cuda")
@@ -61,7 +61,7 @@ Product B: {candidate_text}
 
 Final answer: Yes or No.""" for candidate_text in candidate_texts
     ]
-    outputs = small_llm(prompts, max_new_tokens=20, batch_size=16, truncation=True)
+    outputs = llm(prompts, max_new_tokens=20, batch_size=16, truncation=True)
     responses = [out['generated_text'].strip() for out in outputs]
     return responses
 

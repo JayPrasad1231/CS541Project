@@ -5,15 +5,18 @@ import pandas as pd
 import time
 from tqdm import tqdm
 from sklearn.metrics import precision_recall_fscore_support
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCasualLM, pipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import torch
 
 # === Load your local model ===
-model_name = "NousResearch/hermes-1-mistral"
-print("Loading model...")
+model_name = "google/flan-t5-large"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCasualLM.from_pretrained(model_name, device_map="auto").to("cuda")
-llm = pipeline("text-generation", model=model, tokenizer=tokenizer, batch_size=16, device=0)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    device_map="auto",
+    torch_dtype=torch.float16
+)
+llm = pipeline("text-generation", model=model, tokenizer=tokenizer, device=0, batch_size=4)
 
 amazon = pd.read_csv("../datasets/Amazon.csv", encoding='unicode_escape')
 google = pd.read_csv("../datasets/GoogleProducts.csv", encoding='unicode_escape')
